@@ -2,7 +2,6 @@ from fastapi import FastAPI, File, UploadFile, HTTPException, Form
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import fitz  
-from PIL import Image 
 import os
 
 app = FastAPI()
@@ -18,34 +17,33 @@ async def compress_file(file: UploadFile = File(...), license_key: str = Form(..
     input_path = f"temp_{file.filename}"
     output_path = f"compressed_{file.filename}"
     
-    # حفظ الملف الضخم تدريجياً عشان ما يطفي السيرفر
     with open(input_path, "wb") as buffer:
-        while content := await file.read(1024 * 1024): # يقرأ 1 ميجا كل مرة
+        while content := await file.read(1024 * 1024):
             buffer.write(content)
 
     try:
         if file.filename.lower().endswith(".pdf"):
-            doc = fitz.open(input_path)
-            # تقنية الضغط العميق للـ PDF (تقليل الـ DPI لكل الصور داخله)
-            for page in doc:
-                for img in page.get_images(full=True):
-                    xref = img[0]
-                    # تحويل الصور داخل الـ PDF لدقة 100 DPI (توازن ممتاز للحجم الكبير)
-                    pix = page.get_pixmap(dpi=100)
+            # فتح الملف الأصلي
+            src = fitz.open(input_path)
+            # إنشاء ملف جديد فارغ
+            doc = fitz.open()
             
-            # حفظ مع ضغط الفهارس والبيانات الزائدة
-            doc.save(output_path, garbage=4, deflate=True, clean=True)
+            for page in src:
+                # تحويل كل صفحة لصورة بدقة منخفضة (150 DPI) ثم إعادتها لـ PDF
+                # هذي الطريقة تخسف بالحجم الأرض وتحافظ على القراءة
+                pix = page.get_pixmap(dpi=150) 
+                new_page = doc.new_page(width=page.rect.width, height=page.rect.height)
+                new_page.insert_image(page.rect, pixmap=pix)
+            
+            doc.save(output_path, garbage=4, deflate=True)
             doc.close()
+            src.close()
             
-        else: # للصور الضخمة
-            img = Image.open(input_path)
-            if img.mode in ("RGBA", "P"): img = img.convert("RGB")
-            # الضغط الذهبي: تقليل الجودة لـ 60 وتفعيل التقرير
-            img.save(output_path, "JPEG", optimize=True, quality=60)
-            
-        return FileResponse(output_path, filename=f"COMPRESSED_{file.filename}")
+            return FileResponse(output_path, filename=f"COMPRESSED_{file.filename}")
+        else:
+            raise HTTPException(status_code=400, detail="يرجى رفع ملف PDF فقط لتجربة هذا المكبس")
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail="حدث خطأ أثناء معالجة الملف الضخم")
+        raise HTTPException(status_code=500, detail="خطأ في المعالجة العملاقة")
     finally:
         if os.path.exists(input_path): os.remove(input_path)
